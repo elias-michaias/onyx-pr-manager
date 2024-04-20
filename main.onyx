@@ -56,33 +56,39 @@ pr_details :: (pr: i64) => {
 }
 
 install :: (pr: str) => {
-    pr_start := "https://api.github.com/repos/onyx-lang/onyx/pulls/"
-    concat_args: dyn_str
-    defer delete(&concat_args);
-    conv.format(&concat_args, "{}", pr_start);
-    conv.format(&concat_args, "{}", pr);
-    info := exec("gh api -H \"Accept: application/vnd.github+json\" -H \"X-GitHub-Api-Version: 2022-11-28\"", concat_args)
-    json_output := json.decode_with_result(info)->unwrap()
-    title := json_output.root |> json.get("title") |> json.Value.as_str()
-    branch := json_output.root |> json.get("head") |> json.get("ref") |> json.Value.as_str()
 
-    onyx_path := os.env("ONYX_PATH")->unwrap()
+    // initialize {{{
+        printf("Initializing build process...\n", pr)
+        pr_start := "https://api.github.com/repos/onyx-lang/onyx/pulls/"
+        concat_args: dyn_str
+        defer delete(&concat_args);
+        conv.format(&concat_args, "{}", pr_start);
+        conv.format(&concat_args, "{}", pr);
 
-    pr_folder: dyn_str
-    defer delete(&pr_folder);
-    conv.format(&pr_folder, "{}", onyx_path);
-    conv.format(&pr_folder, "{}", "/pr/");
-    conv.format(&pr_folder, "{}", pr);
-    conv.format(&pr_folder, "{}", "/");
+        info := exec("gh api -H \"Accept: application/vnd.github+json\" -H \"X-GitHub-Api-Version: 2022-11-28\"", concat_args)
+        json_output := json.decode_with_result(info)->unwrap()
+        title := json_output.root |> json.get("title") |> json.Value.as_str()
+        branch := json_output.root |> json.get("head") |> json.get("ref") |> json.Value.as_str()
 
-    exec("mkdir -p", pr_folder)
+        onyx_path := os.env("ONYX_PATH")->unwrap()
+        pr_folder: dyn_str
+        defer delete(&pr_folder);
+        conv.format(&pr_folder, "{}", onyx_path);
+        conv.format(&pr_folder, "{}", "/pr/");
+        conv.format(&pr_folder, "{}", pr);
+        conv.format(&pr_folder, "{}", "/");
+        exec("mkdir -p", pr_folder)
+    // initialize }}}
 
-    printf("Cloning Onyx language repo...\n", pr)
-    exec("cd", pr_folder, "; git clone https://github.com/onyx-lang/onyx")
+    // clone {{{
+        printf("Cloning Onyx language repo...\n", pr)
+        exec("cd", pr_folder, "; git clone https://github.com/onyx-lang/onyx")
+    // clone }}}
 
-    printf("Fetching pull request #{}...\n", pr)
-    exec("cd", pr_folder, "; cd onyx ; git fetch origin ; git checkout", branch, " ; git pull origin", branch)
-    
+    // fetch {{{
+        printf("Fetching pull request #{}...\n", pr)
+        exec("cd", pr_folder, "; cd onyx ; git fetch origin ; git checkout", branch, " ; git pull origin", branch)
+    // fetch }}}
 
     // build {{{
         printf("Building pull request #{}...\n", pr)
@@ -97,12 +103,19 @@ install :: (pr: str) => {
         ->args(.["-c", build_args])->output()
     // build }}}
 
-    printf("Creating symbolic link for build to 'onyx-pr-{}'...\n", pr)
-    alias_args: dyn_str
-    defer delete(&alias_args);
-    conv.format(&alias_args, "{}", "../../bin/onyx-pr-");
-    conv.format(&alias_args, "{}", pr);
-    exec("cd", pr_folder, "; ln bin/onyx", cast(str) alias_args)
+    // link {{{
+        printf("Creating launch script 'onyx-pr-{}'...\n", pr)
+        script := tprintf(
+        "#!/bin/sh
+        export ONYX_PATH=$ONYX_PATH/pr/{}/
+        exec $ONYX_PATH/bin/onyx $@", pr)
+        file := os.open(tprintf("{}/bin/onyx-pr-{}", onyx_path, pr), .Write)->unwrap();
+        defer os.close(&file);
+        file_writer := io.Writer.make(&file);
+        defer io.Writer.free(&file_writer);
+        file_writer->write(script);
+        exec("chmod +x", tprintf("{}/bin/onyx-pr-{}", onyx_path, pr))
+    // link }}}
 
     println("Pull request build installed!")
 

@@ -14,7 +14,7 @@ config {
 build {
     default {
         source "./main.onyx" 
-        target "./dist/app.wasm" 
+        target "/home/elias/.onyx/tools/pr.wasm" 
         args "--feature" "optional-semicolons" 
     }
 }

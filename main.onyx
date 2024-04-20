@@ -273,6 +273,7 @@ main :: (args_: [] cstr) {
             for pr in prs_ {
                 printf("Wiping pull request build #{}...\n", pr)
                 exec("cd", onyx_path, "; cd pr ; rm -rf", pr)
+                exec("cd", onyx_path, "; cd bin ; rm -f", tprintf("onyx-pr-{}", pr))
             }
             println("Wiping complete!")
         }

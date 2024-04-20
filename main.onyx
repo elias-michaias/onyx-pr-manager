@@ -36,7 +36,7 @@ get_prs :: () => {
     return prs
 }
 
-pr_details :: (pr: i64) => {
+pr_details :: (pr) => {
     pr_start := "https://api.github.com/repos/onyx-lang/onyx/pulls/"
     concat_args: dyn_str
     defer delete(&concat_args);
@@ -107,6 +107,7 @@ install :: (pr: str) => {
         printf("Creating launch script 'onyx-pr-{}'...\n", pr)
         script := tprintf(
         "#!/bin/sh
+        echo 'Using pull request build #{}...'
         export ONYX_PATH=$ONYX_PATH/pr/{}/
         exec $ONYX_PATH/bin/onyx $@", pr)
         file := os.open(tprintf("{}/bin/onyx-pr-{}", onyx_path, pr), .Write)->unwrap();
@@ -117,22 +118,75 @@ install :: (pr: str) => {
         exec("chmod +x", tprintf("{}/bin/onyx-pr-{}", onyx_path, pr))
     // link }}}
 
-    println("Pull request build installed!")
+    printf("Pull request build #{} installed!\n", pr)
+
+}
+
+update :: (pr: str) => {
+
+    // initialize {{{
+        onyx_path := os.env("ONYX_PATH")->unwrap()
+        pr_folder: dyn_str
+        defer delete(&pr_folder);
+        conv.format(&pr_folder, "{}", onyx_path);
+        conv.format(&pr_folder, "{}", "/pr/");
+        conv.format(&pr_folder, "{}", pr);
+        conv.format(&pr_folder, "{}", "/");
+    // initialize }}}
+
+    // fetch {{{
+        printf("Fetching pull request #{}...\n", pr)
+        exec("cd", pr_folder, "; cd onyx ;  git pull origin")
+    // fetch }}}
+
+    // build {{{
+        printf("Building pull request #{}...\n", pr)
+        build_args: dyn_str
+        defer delete(&build_args);
+        conv.format(&build_args, "{}", "cd ");
+        conv.format(&build_args, "{}", cast(str) pr_folder);
+        conv.format(&build_args, "{}", "; cd onyx ; sh ./build.sh compile install");
+        folders := exec("cd", pr_folder, "; ls") |> str.strip_whitespace() |> str.split('\n')
+        for folder in folders {
+            if folder != "onyx" do exec("cd", pr_folder, "; rm -rf", folder)
+        }
+        os.command()->path("/bin/sh")
+        ->env("ONYX_INSTALL_DIR", pr_folder)->env("ONYX_CC", "gcc")
+        ->env("ONYX_RUNTIME_LIBRARY", "ovmwasm")->env("ONYX_ARCH", "linux_x86_64")
+        ->args(.["-c", build_args])->output()
+    // build }}}
+
+    // link {{{
+        printf("Creating launch script 'onyx-pr-{}'...\n", pr)
+        exec("rm", tprintf("{}/bin/onyx-pr-{}", onyx_path, pr))
+        script := tprintf(
+        "#!/bin/sh
+        echo 'Using pull request build #{}...'
+        export ONYX_PATH=$ONYX_PATH/pr/{}/
+        exec $ONYX_PATH/bin/onyx $@", pr)
+        file := os.open(tprintf("{}/bin/onyx-pr-{}", onyx_path, pr), .Write)->unwrap();
+        defer os.close(&file);
+        file_writer := io.Writer.make(&file);
+        defer io.Writer.free(&file_writer);
+        file_writer->write(script);
+        exec("chmod +x", tprintf("{}/bin/onyx-pr-{}", onyx_path, pr))
+    // link }}}
+
+    printf("Pull request build #{} updated!\n", pr)
 
 }
 
 help :: () {
     println("Usage: onyx pr [command] [pull request ID]\n")
     println("Commands:")
-    println("  install, -i <id>     Install a pull request of given ID.")
-    println("  search, -s           List all open pull requests.")
-    println("  current, -c          Display the current active pull request build.")
-    println("  list, -l             List all installed pull request builds.")
-    println("  update, -u           Update all installed pull request builds.")
-    println("  prune, -p            Prune installed builds for merged pull requests.")
-    println("  wipe, -w             Wipe all pull request builds.")
-    println("  help, -h             Display this help message.")
-    println("  version, -v          Display the current version of onyx pr.\n")
+    println("  install, -i <id>         Install a pull request of given ID.")
+    println("  search, -s               List all open pull requests.")
+    println("  list, -l                 List all installed pull request builds.")
+    println("  update, -u <id>/all      Update installed pull request builds.")
+    println("  prune, -p                Prune installed builds for merged pull requests.")
+    println("  wipe, -w <id>/all        Delete installed pull request builds.")
+    println("  help, -h                 Display this help message.")
+    println("  version, -v              Display the current version of onyx pr.\n")
     println("Prerequisites:")
     println("   1. The ONYX_PATH environment variable must be set.")
     println("   2. This Onyx executable must be in ONYX_PATH/tools.")
@@ -150,11 +204,11 @@ main :: (args_: [] cstr) {
         }
         case "install", "-i" {
             if !args[1] { 
-                println("ERROR: No pull request ID specified.")
+                println("\e[31mERROR: No pull request ID specified.")
                 return
             }
             if !(get_prs() |> Array.some([pr](tprintf("{}", pr) == args[1]))) { 
-                println("ERROR: Pull request not found.") 
+                println("\e[31mERROR: Pull request not found.") 
                 return
             }
             install(args[1])
@@ -164,16 +218,63 @@ main :: (args_: [] cstr) {
                 pr_details(pr)
             }
         }
-        case "current", "-c" {
-            printf("The current active pull request build is #{}.", "140")
-        }
         case "list", "-l" {
+            onyx_path := os.env("ONYX_PATH")->unwrap()
+            prs := exec("cd", onyx_path, "; cd pr ; ls")
+            if prs == "" { 
+                println("\e[31mERROR: No pull request builds installed.") 
+                return
+            }
+            prs_ := prs |> str.strip_whitespace() |> str.split('\n')
+            for pr in prs_ {
+                if !(get_prs() |> Array.some([pr_](tprintf("{}", pr_) == pr))) { 
+                    printf("\e[31mERROR: Pull request \"{}\" not found or already merged.", pr) 
+                    return
+                }
+                pr_details(pr)
+            }
         }
         case "update", "-u" {
+            onyx_path := os.env("ONYX_PATH")->unwrap()
+            prs := exec("cd", onyx_path, "; cd pr ; ls")
+            if prs == "" { 
+                println("\e[31mERROR: No pull request builds installed.") 
+                return
+            }
+            prs_ := prs |> str.strip_whitespace() |> str.split('\n')
+            all_prs := get_prs()
+            for pr in prs_ {
+                update(pr)
+            }
+            println("\e[34mUpdating complete!")
         }
         case "prune", "-p" {
+            onyx_path := os.env("ONYX_PATH")->unwrap()
+            prs := exec("cd", onyx_path, "; cd pr ; ls")
+            if prs == "" { 
+                println("\e[31mERROR: No pull request builds installed.") 
+                return
+            }
+            prs_ := prs |> str.strip_whitespace() |> str.split('\n')
+            all_prs := get_prs()
+            for pr in prs_ {
+                if !(all_prs |> Array.some([pr_](tprintf("{}", pr_) == pr))) { 
+                    printf("Pruning merged pull request build #{}...\n", pr) 
+                    exec("cd", onyx_path, "; cd pr ; rm -rf", pr)
+                }
+            }
+            println("\e[34mPruning complete!")
         }
         case "wipe", "-w" {
+            onyx_path := os.env("ONYX_PATH")->unwrap()
+            prs := exec("cd", onyx_path, "; cd pr ; ls")
+            prs_ := prs |> str.strip_whitespace() |> str.split('\n')
+            all_prs := get_prs()
+            for pr in prs_ {
+                printf("Wiping pull request build #{}...\n", pr)
+                exec("cd", onyx_path, "; cd pr ; rm -rf", pr)
+            }
+            println("Wiping complete!")
         }
         case "help", "-h" {
             help()

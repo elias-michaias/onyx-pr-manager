@@ -1,0 +1,173 @@
+//+optional-semicolons
+use core {*}
+use core.os {command}
+use core.encoding {*}
+
+
+exec :: (args: ..str) => {
+    exec_args: [..] str
+    exec_args << "-c"
+    defer exec_args->free()
+    
+
+    concat_args: dyn_str
+    defer delete(&concat_args);
+
+    for arg in args {
+        if arg != args[0] do conv.format(&concat_args, "{}", " ");
+        conv.format(&concat_args, "{}", arg);
+    }
+
+    exec_args << concat_args
+
+    output := os.command()->path("/bin/sh")->args(exec_args)->output()->unwrap()
+    return output
+}
+
+get_prs :: () => {
+    pr_endpoint := "https://api.github.com/repos/onyx-lang/onyx/pulls?state=opened"
+    output := exec("gh api -H \"Accept: application/vnd.github+json\" -H \"X-GitHub-Api-Version: 2022-11-28\"", pr_endpoint)
+    json_output := json.decode_with_result(output)->unwrap()
+
+    prs := json_output.root->as_array_iter() 
+        |> iter.map(pr => pr |> json.get("number") |> json.Value.as_int())
+        |> iter.collect()
+
+    return prs
+}
+
+pr_details :: (pr: i64) => {
+    pr_start := "https://api.github.com/repos/onyx-lang/onyx/pulls/"
+    concat_args: dyn_str
+    defer delete(&concat_args);
+    conv.format(&concat_args, "{}", pr_start);
+    conv.format(&concat_args, "{}", pr);
+    info := exec("gh api -H \"Accept: application/vnd.github+json\" -H \"X-GitHub-Api-Version: 2022-11-28\"", concat_args)
+    json_output := json.decode_with_result(info)->unwrap()
+
+    title := json_output.root |> json.get("title") |> json.Value.as_str()
+    author := json_output.root |> json.get("user") |> json.get("login") |> json.Value.as_str()
+    created := json_output.root |> json.get("created_at") |> json.Value.as_str() |> str.split('T')
+    updated := json_output.root |> json.get("updated_at") |> json.Value.as_str() |> str.split('T')
+    version := json_output.root |> json.get("milestone") |> json.get("title") |> json.Value.as_str()
+    summary := json_output.root |> json.get("body") |> json.Value.as_str()
+
+    printf("\e[35m#{} :: \e[34m{} \e[90m=> {} [{} {}]\n", pr, title, version, updated[0], updated[1])
+}
+
+install :: (pr: str) => {
+    pr_start := "https://api.github.com/repos/onyx-lang/onyx/pulls/"
+    concat_args: dyn_str
+    defer delete(&concat_args);
+    conv.format(&concat_args, "{}", pr_start);
+    conv.format(&concat_args, "{}", pr);
+    info := exec("gh api -H \"Accept: application/vnd.github+json\" -H \"X-GitHub-Api-Version: 2022-11-28\"", concat_args)
+    json_output := json.decode_with_result(info)->unwrap()
+    title := json_output.root |> json.get("title") |> json.Value.as_str()
+    branch := json_output.root |> json.get("head") |> json.get("ref") |> json.Value.as_str()
+
+    onyx_path := os.env("ONYX_PATH")->unwrap()
+
+    pr_folder: dyn_str
+    defer delete(&pr_folder);
+    conv.format(&pr_folder, "{}", onyx_path);
+    conv.format(&pr_folder, "{}", "/pr/");
+    conv.format(&pr_folder, "{}", pr);
+    conv.format(&pr_folder, "{}", "/");
+
+    exec("mkdir -p", pr_folder)
+
+    printf("Cloning Onyx language repo...\n", pr)
+    exec("cd", pr_folder, "; git clone https://github.com/onyx-lang/onyx")
+
+    printf("Fetching pull request #{}...\n", pr)
+    exec("cd", pr_folder, "; cd onyx ; git fetch origin ; git checkout", branch, " ; git pull origin", branch)
+    
+
+    // build {{{
+        printf("Building pull request #{}...\n", pr)
+        build_args: dyn_str
+        defer delete(&build_args);
+        conv.format(&build_args, "{}", "cd ");
+        conv.format(&build_args, "{}", cast(str) pr_folder);
+        conv.format(&build_args, "{}", "; cd onyx ; sh ./build.sh compile install");
+        os.command()->path("/bin/sh")
+        ->env("ONYX_INSTALL_DIR", pr_folder)->env("ONYX_CC", "gcc")
+        ->env("ONYX_RUNTIME_LIBRARY", "ovmwasm")->env("ONYX_ARCH", "linux_x86_64")
+        ->args(.["-c", build_args])->output()
+    // build }}}
+
+    printf("Creating symbolic link for build to 'onyx-pr-{}'...\n", pr)
+    alias_args: dyn_str
+    defer delete(&alias_args);
+    conv.format(&alias_args, "{}", "../../bin/onyx-pr-");
+    conv.format(&alias_args, "{}", pr);
+    exec("cd", pr_folder, "; ln bin/onyx", cast(str) alias_args)
+
+    println("Pull request build installed!")
+
+}
+
+help :: () {
+    println("Usage: onyx pr [command] [pull request ID]\n")
+    println("Commands:")
+    println("  install, -i <id>     Install a pull request of given ID.")
+    println("  search, -s           List all open pull requests.")
+    println("  current, -c          Display the current active pull request build.")
+    println("  list, -l             List all installed pull request builds.")
+    println("  update, -u           Update all installed pull request builds.")
+    println("  prune, -p            Prune installed builds for merged pull requests.")
+    println("  wipe, -w             Wipe all pull request builds.")
+    println("  help, -h             Display this help message.")
+    println("  version, -v          Display the current version of onyx pr.\n")
+    println("Prerequisites:")
+    println("   1. The ONYX_PATH environment variable must be set.")
+    println("   2. This Onyx executable must be in ONYX_PATH/tools.")
+    println("   3. The git CLI must be installed.")
+    println("   4. The gh CLI must be installed and authenticated.\n")
+    println("The installed pull request build will be accessible as 'onyx-pr-[id]'.")
+}
+
+main :: (args_: [] cstr) {
+    args: [] str = iter.as_iter(args_)->map(x => string.as_str(x))->collect()
+
+    switch args[0] {
+        case "version", "-v" {
+            println("v0.1.0")
+        }
+        case "install", "-i" {
+            if !args[1] { 
+                println("ERROR: No pull request ID specified.")
+                return
+            }
+            if !(get_prs() |> Array.some([pr](tprintf("{}", pr) == args[1]))) { 
+                println("ERROR: Pull request not found.") 
+                return
+            }
+            install(args[1])
+        }
+        case "search", "-s" {
+            for pr in get_prs() {
+                pr_details(pr)
+            }
+        }
+        case "current", "-c" {
+            printf("The current active pull request build is #{}.", "140")
+        }
+        case "list", "-l" {
+        }
+        case "update", "-u" {
+        }
+        case "prune", "-p" {
+        }
+        case "wipe", "-w" {
+        }
+        case "help", "-h" {
+            help()
+        }
+        case _ {
+            println("ERROR: Unrecognized sequence of arguments.\n")
+        }
+    }
+
+}

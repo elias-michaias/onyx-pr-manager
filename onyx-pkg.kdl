@@ -1,0 +1,21 @@
+package {
+    name "onyx-pr" 
+    author "" 
+    url "" 
+    description "Easily download and test Onyx PRs." 
+    version "0.0.1" 
+}
+
+config {
+    dependency_source_path "./lib" 
+    dependency_binary_path "./bin" 
+}
+
+build {
+    default {
+        source "./main.onyx" 
+        target "./dist/app.wasm" 
+        args "--feature" "optional-semicolons" 
+    }
+}
+

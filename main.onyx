@@ -318,7 +318,7 @@ main :: (args_: [] cstr) {
             help()
         }
         case _ {
-            println("ERROR: Unrecognized sequence of arguments.\n")
+            println("\e[31mERROR: Unrecognized sequence of arguments.\n")
         }
     }
 

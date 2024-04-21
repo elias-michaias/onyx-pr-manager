@@ -109,7 +109,7 @@ install :: (pr: str) => {
         "#!/bin/sh
         echo 'Using pull request build #{}...'
         export ONYX_PATH=$ONYX_PATH/pr/{}/
-        exec $ONYX_PATH/bin/onyx $@", pr)
+        exec $ONYX_PATH/bin/onyx $@", pr, pr)
         file := os.open(tprintf("{}/bin/onyx-pr-{}", onyx_path, pr), .Write)->unwrap();
         defer os.close(&file);
         file_writer := io.Writer.make(&file);
@@ -163,7 +163,7 @@ update :: (pr: str) => {
         "#!/bin/sh
         echo 'Using pull request build #{}...'
         export ONYX_PATH=$ONYX_PATH/pr/{}/
-        exec $ONYX_PATH/bin/onyx $@", pr)
+        exec $ONYX_PATH/bin/onyx $@", pr, pr)
         file := os.open(tprintf("{}/bin/onyx-pr-{}", onyx_path, pr), .Write)->unwrap();
         defer os.close(&file);
         file_writer := io.Writer.make(&file);
@@ -237,14 +237,31 @@ main :: (args_: [] cstr) {
         case "update", "-u" {
             onyx_path := os.env("ONYX_PATH")->unwrap()
             prs := exec("cd", onyx_path, "; cd pr ; ls")
+            prs_ := prs |> str.strip_whitespace() |> str.split('\n')
             if prs == "" { 
                 println("\e[31mERROR: No pull request builds installed.") 
                 return
             }
-            prs_ := prs |> str.strip_whitespace() |> str.split('\n')
-            all_prs := get_prs()
-            for pr in prs_ {
-                update(pr)
+            if !args[1] { 
+                println("\e[31mERROR: No pull request ID specified.")
+                println("\e[31mTry a pull request ID or the keyword 'all'.")
+                return
+            }
+            if args[1] == "all" {
+                all_prs := get_prs()
+                for pr in prs_ {
+                    if !(all_prs |> Array.some([pr_](tprintf("{}", pr_) == pr))) { 
+                        printf("\e[31mERROR: Pull request \"{}\" not found or already merged.", pr) 
+                        return
+                    }
+                    update(pr)
+                }
+            } else {
+                if !(prs |> str.strip_whitespace() |> str.split('\n') |> Array.some([pr](tprintf("{}", pr) == args[1]))) { 
+                    println("\e[31mERROR: Pull request not found.") 
+                    return
+                }
+                update(args[1])
             }
             println("\e[34mUpdating complete!")
         }
@@ -269,11 +286,31 @@ main :: (args_: [] cstr) {
             onyx_path := os.env("ONYX_PATH")->unwrap()
             prs := exec("cd", onyx_path, "; cd pr ; ls")
             prs_ := prs |> str.strip_whitespace() |> str.split('\n')
-            all_prs := get_prs()
-            for pr in prs_ {
-                printf("Wiping pull request build #{}...\n", pr)
-                exec("cd", onyx_path, "; cd pr ; rm -rf", pr)
-                exec("cd", onyx_path, "; cd bin ; rm -f", tprintf("onyx-pr-{}", pr))
+            if prs == "" { 
+                println("\e[31mERROR: No pull request builds installed.") 
+                return
+            }
+            if !args[1] { 
+                println("\e[31mERROR: No pull request ID specified.")
+                println("\e[31mTry a pull request ID or the keyword 'all'.")
+                return
+            }
+            if args[1] == "all" {
+                printf("Wiping all pull request builds...\n")
+                all_prs := get_prs()
+                for pr in prs_ {
+                    printf("Wiping pull request build #{}...\n", pr)
+                    exec("cd", onyx_path, "; cd pr ; rm -rf", pr)
+                    exec("cd", onyx_path, "; cd bin ; rm -f", tprintf("onyx-pr-{}", pr))
+                }
+            } else {
+                if !(prs_ |> Array.some([pr](tprintf("{}", pr) == args[1]))) { 
+                    println("\e[31mERROR: Pull request not found.") 
+                    return
+                }
+                printf("Wiping pull request build #{}...\n", args[1])
+                exec("cd", onyx_path, "; cd pr ; rm -rf", args[1])
+                exec("cd", onyx_path, "; cd bin ; rm -f", tprintf("onyx-pr-{}", args[1]))
             }
             println("Wiping complete!")
         }

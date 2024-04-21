@@ -3,7 +3,7 @@ package {
     author "" 
     url "" 
     description "Easily download and test Onyx PRs." 
-    version "0.0.1" 
+    version "0.1.0" 
 }
 
 config {
